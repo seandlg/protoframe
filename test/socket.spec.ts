@@ -22,10 +22,10 @@ async function createCacheWithClient(): Promise<
     wss.on('connection', (ws) => {
       console.log('Server received connection!');
       resolve(ws);
-      ws.on('message', (msg) => {
-        console.log('Server received message');
-        console.log(msg);
-      });
+      // ws.on('message', (msg) => {
+      //   console.log('Server received message');
+      //   console.log(msg);
+      // });
     });
   });
   clientWebsocket = await new Promise<WebSocket>((resolve) => {
@@ -34,8 +34,8 @@ async function createCacheWithClient(): Promise<
       resolve(cs);
     });
     cs.on('message', (msg) => {
-      console.log('Client received message');
-      console.log(msg);
+      // console.log('Client received message');
+      // console.log(msg);
     });
   });
   serverWebsocket = await promisifiedServerSocket;
@@ -74,7 +74,7 @@ async function testFullyFunctionalCache(
 
 describe('ProtoframePubsub', () => {
   describe('ask', () => {
-    it('should allow two way communication across a window', async () => {
+    it('should get info from the caching server.', async () => {
       const [server, client] = await createCacheWithClient();
       try {
         await testFullyFunctionalCache(client);

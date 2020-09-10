@@ -160,8 +160,6 @@ function handleAsk0<
   handler: (body: ProtoframeMessageBody<P, T>) => Promise<R>,
 ): [WebSocket, (ev: MessageEvent) => void] {
   const listener = async (ev: any): Promise<void> => {
-    console.log('ASK LISTENER TRIGGERED!');
-    console.log(JSON.parse(ev.data));
     const payload = JSON.parse(ev.data);
     if (isPayloadBodyOfType(protocol, 'ask', type, payload)) {
       const response = await handler(payload.body);
