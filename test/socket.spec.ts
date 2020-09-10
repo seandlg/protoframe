@@ -27,16 +27,10 @@ async function createCacheWithClient(): Promise<
       console.log(`Cannot close ${name}. ${name} not running.`);
     }
   });
-  console.log('Starting server');
   wss = new WebSocket.Server({ port: 8080 });
   const promisifiedServerSocket = new Promise<WebSocket>((resolve) => {
     wss.on('connection', (ws) => {
-      console.log('Server received connection!');
       resolve(ws);
-      // ws.on('message', (msg) => {
-      //   console.log('Server received message');
-      //   console.log(msg);
-      // });
     });
   });
   clientWebsocket = await new Promise<WebSocket>((resolve) => {
@@ -44,13 +38,8 @@ async function createCacheWithClient(): Promise<
     cs.on('open', () => {
       resolve(cs);
     });
-    cs.on('message', (msg) => {
-      // console.log('Client received message');
-      // console.log(msg);
-    });
   });
   serverWebsocket = await promisifiedServerSocket;
-  console.log('Resolved client & server');
   const server = new ProtoframePubsub(cacheProtocol, serverWebsocket);
   const client = new ProtoframePubsub(cacheProtocol, clientWebsocket);
 
