@@ -51,6 +51,36 @@ The `ProtoframeDescriptor` defines 2 elements of your protocol:
 2. The value of the descriptor (`{type: 'cache'}`) defines a type key for the
    protocol, which is used to key on specific types of messages to listen to
    between the pages
+   
+#### In more detail
+Your protocol is a simple interface that extends `Protoframe`.
+   
+```typescript
+import { Protoframe } from 'protoframe';
+
+interface cacheProtocol extends Protoframe {
+  getFoo: {
+    body: { key: string };
+    response: { value: string };
+  };
+  setBar: {
+    body: { key: string; value: string };
+  };
+}
+```
+
+Before getting started, you must namespace your protocol. Essentially, you assign the
+protocol a `type`, that is used to seperate different protocols from
+one another. This way, you can have multiple protocols, with potentially
+the same messages, seperate from one another.
+
+```typescript
+import { ProtoframeDescriptor } from 'protoframe';
+
+const cacheProtocolDescriptor: ProtoframeDescriptor<cacheProtocol> = {
+  type: "cache",
+};
+```
 
 ### Connectors
 
