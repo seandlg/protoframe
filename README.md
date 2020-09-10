@@ -1,75 +1,62 @@
-# Protoframe
+# protoframe-ws [WIP]
 
-[![Build Status](https://travis-ci.org/mrvisser/protoframe.svg?branch=master)](https://travis-ci.org/mrvisser/protoframe)
-
-A small (dependency-free) library for 2-way iframe communication.
+A small (dependency-free) library for defining _typed JSON protocols_ on top of `WebSockets`. **Heavily** based on [protoframe](https://github.com/mrvisser/protoframe).
 
 ## Problem
 
-You are embedding an iframe where you would like to communicate with the
-following facilities:
-
-1. From your parent page, you need to use `iframe.contentWindow.postMessage`
-2. From your iframe, you need to subscribe to these messages using
-   `window.addEventListener('message', (ev) => ...)`
-3. And vice versa, sometimes at the same time
+You have a `client`-`server` architecture and are using [ws](https://www.npmjs.com/package/ws) for `WebSocket`-based communcation. You would like to create some sort of JSON-based `API` for communication.
 
 ## Solution
 
 This library allows you to define a protocol for this type of communication
 supporting both fire-and-forget (`tell`) semantics, as well as request/response
 (`ask`) semantics. It provides connector constructors that will facilitate the
-sending and receiving these messages across parent and iframe windows.
+sending and receiving of these messages across `clients` & `servers`.
+
+This is achieved by creating a `ProtocolDescriptor`, which wraps a fully-connected Websocket (`readyState=1`) and provides an `object` that allows for _registering message handlers_ as well as _sending messages_.
+
+`protoframe-ws` processes messages that were registered by it by creating `eventHandlers`. It is not involved with connection establishment & its `eventHandler` must be cleared when the connection is terminated.
 
 ## How?
 
-`npm install protoframe --save`
+`npm install protoframe-ws --save` [Coming soon]
 
 ### ProtoframeDescriptor
 
-```typescript
-import { ProtoframeDescriptor } from 'protoframe';
+Your protocol is a simple interface that extends `Protoframe`. It consists of messages, that are either of `tell` or `ask` semantic. `ask` messages must have a `response` field, whereas `tell` messages must not.
 
-const cacheProtocol: ProtoframeDescriptor<{
-  getFoo: {
-    body: { key: string };
-    response: { value: string };
-  };
-  setBar: {
-    body: { key: string; value: string };
-  };
-}> = { type: 'cache' };
-```
+Concretely, you define messages as `key-value`-pairs, where the `key` represents a message-identifier, and the `value` represents an `object`. This `object` has a `body` (for both `ask` and `tell` messages) and optionally a `response` (only for `ask` messages). Inside the `body` of both `body` & `response`, you define your typed message contents.
 
-The `ProtoframeDescriptor` defines 2 elements of your protocol:
-
-1. The message types. The type argument is a structural type that defines the
-   message types as its top level key. For each message type, it defines the
-   `body` type of the payload (for `ask` and `tell` requests), and an optional
-   `response` types (for `ask` requests). An `ask` message must define a
-   `response` key, a `tell` message must not
-2. The value of the descriptor (`{type: 'cache'}`) defines a type key for the
-   protocol, which is used to key on specific types of messages to listen to
-   between the pages
-   
-#### In more detail
-Your protocol is a simple interface that extends `Protoframe`.
-   
 ```typescript
 import { Protoframe } from 'protoframe';
 
-interface cacheProtocol extends Protoframe {
-  getFoo: {
-    body: { key: string };
-    response: { value: string };
+export interface CacheProtocol {
+  // Get a key from a cache
+  get: {
+    body: {
+      key: string;
+    };
+    response: {
+      value: string | null;
+    };
   };
-  setBar: {
-    body: { key: string; value: string };
+  // Set a key in a cache
+  set: {
+    body: {
+      key: string;
+      value: string;
+    };
+  };
+  // Delete an item in the cache
+  delete: {
+    body: {
+      key: string;
+    };
   };
 }
 ```
 
-Before getting started, you must namespace your protocol. Essentially, you assign the
+Before getting started, you must further namespace your protocol. Essentially, you assign the
 protocol a `type`, that is used to seperate different protocols from
 one another. This way, you can have multiple protocols, with potentially
 the same messages, seperate from one another.
@@ -78,48 +65,53 @@ the same messages, seperate from one another.
 import { ProtoframeDescriptor } from 'protoframe';
 
 const cacheProtocolDescriptor: ProtoframeDescriptor<cacheProtocol> = {
-  type: "cache",
+  type: 'cache',
 };
 ```
 
-### Connectors
+### WebSocket connections
 
-The connector allows 2-way communication between a page and its iframe. For
-example, we have a page that wishes to use an iframe as a "cache" server:
+The actual connections are established as pure `websockets`. `protoframe` sits on top of these `websockets` to handle messaging.
 
-**Iframe:**
+Things look very similar for `clients` & `servers`, though the server creates multiple `ProtoframePubsub`s (one for each client).
+
+**Server:**
 
 ```typescript
-import { ProtoframePubsub } from 'protoframe';
+import WebSocket from 'ws';
+import { ProtoframePubsub } from '../src';
 
-// Will hold our cache state
-const data: { [key: string]: string } = {};
+// Array to hold all connections
+const clientPubSubs: ProtoframePubsub[] = [];
+const data = {};
 
-// The connector. This function creates a connector that listens for messages
-// on `window` and sends messages and responses over `window.parent`
-const cache = ProtoframePubsub.iframe(cacheProtocol);
-
-// Implement our handlers for the ask and tell requests defined in the protocol
-cache.handleTell('setBar', ({ key, value }) => (data[key] = value));
-cache.handleAsk('getFoo', async ({ key }) => {
-  const value = key in data ? data[key] : null;
-  return { value };
-});
+(async () => {
+  const wss = new WebSocket.Server({ port: 8080 });
+  wss.on('connection', (ws) => {
+    const clientPubSub = new ProtoframePubsub(cacheProtocolDescriptor, ws);
+    // Cache the client for later use
+    clientPubSubs.push(clientPubSub);
+    clientPubSub.handleTell('set', ({ key, value }) => (data[key] = value));
+    clientPubSub.handleTell('delete', ({ key }) => delete data[key]);
+    clientPubSub.handleAsk('get', async ({ key }) => {
+      const value = key in data ? data[key] : null;
+      return { value };
+    });
+  });
+})();
 ```
 
-**Parent:**
+**Client:**
 
 ```typescript
-import { ProtoframePubsub } from 'protoframe';
+import WebSocket from 'ws';
+import { ProtoframePubsub } from '../src';
 
-const iframe = document.getElementById('myCacheServerIframe');
-const client = ProtoframePubsub.parent(cacheProtocol, iframe);
-
-// Wait for the iframe page to load and for the connector to be instantiated
-ProtoframePubsub.connect(client).then(() => {
-  client.tell('setBar', { key: 'my key', value: 'my value' });
-
+(async () => {
+  const clientSocket = new WebSocket('ws://127.0.0.1:8080');
+  const pubSub = new ProtoframePubsub(cacheProtocolDescriptor, clientSocket);
+  pubSub.tell('setBar', { key: 'my key', value: 'my value' });
   // value = { value: 'my value' }
-  const value = await client.ask('getFoo', { key: 'my key' });
-});
+  const value = await pubSub.ask('getFoo', { key: 'my key' });
+})();
 ```
