@@ -119,7 +119,7 @@ function awaitResponse<
 ): Promise<R> {
   return new Promise((accept) => {
     const handle: (ev: any) => void = (ev) => {
-      const payload = ev.data;
+      const payload = JSON.parse(ev.data);
       if (isPayloadResponseOfType(protocol, type, payload)) {
         webSocket.removeEventListener('message', handle);
         accept(payload.response);
@@ -140,7 +140,7 @@ function handleTell0<
   handler: (body: ProtoframeMessageBody<P, T>) => void,
 ): [WebSocket, (ev: MessageEvent) => void] {
   const listener = (ev: any): void => {
-    const payload = ev.data;
+    const payload = JSON.parse(ev.data);
     if (isPayloadBodyOfType(protocol, 'tell', type, payload)) {
       handler(payload.body);
     }
@@ -160,7 +160,9 @@ function handleAsk0<
   handler: (body: ProtoframeMessageBody<P, T>) => Promise<R>,
 ): [WebSocket, (ev: MessageEvent) => void] {
   const listener = async (ev: any): Promise<void> => {
-    const payload = ev.data;
+    console.log('ASK LISTENER TRIGGERED!');
+    console.log(JSON.parse(ev.data));
+    const payload = JSON.parse(ev.data);
     if (isPayloadBodyOfType(protocol, 'ask', type, payload)) {
       const response = await handler(payload.body);
       webSocket.send(
@@ -212,12 +214,7 @@ async function ask0<
   return run;
 }
 
-interface Connector {
-  /** Destroy the connector and all resources/listeners being held. */
-  destroy(): void;
-}
-
-interface AbstractProtoframeSubscriber<P extends Protoframe> extends Connector {
+interface AbstractProtoframeSubscriber<P extends Protoframe> {
   /**
    * Handle a message that was sent with the [[ProtoframePublisher.tell]]
    * function.
@@ -234,7 +231,7 @@ interface AbstractProtoframeSubscriber<P extends Protoframe> extends Connector {
   ): void;
 }
 
-interface AbstractProtoframePublisher<P extends Protoframe> extends Connector {
+interface AbstractProtoframePublisher<P extends Protoframe> {
   /**
    * Send a message to a receiving connector. This is a fire-and-forget emitter
    * that does not accept a response. If you want a request-response workflow,
@@ -298,9 +295,7 @@ export class ProtoframeSubscriber<P extends Protoframe>
   implements AbstractProtoframeSubscriber<P> {
   constructor(
     private readonly protocol: ProtoframeDescriptor<P>,
-    private readonly webSocket: WebSocket = new WebSocket(
-      'https://staging.jelly-party.com',
-    ),
+    private readonly webSocket: WebSocket,
   ) {}
 
   private listeners: [WebSocket, (ev: MessageEvent) => void][] = [];
@@ -327,14 +322,8 @@ export class ProtoframePublisher<P extends Protoframe>
    *
    * @param protocol The protocol this connector will communicate with
    */
-  public static parent<P extends Protoframe>(
-    protocol: ProtoframeDescriptor<P>,
-    ws: WebSocket,
-  ): ProtoframePublisher<P> {
-    return new ProtoframePublisher(protocol, ws);
-  }
 
-  private listeners: [WebSocket, (ev: MessageEvent) => void][] = [];
+  private listeners: [WebSocket, (ev: any) => void][] = [];
 
   constructor(
     private readonly protocol: ProtoframeDescriptor<P>,
@@ -366,39 +355,14 @@ export class ProtoframePubsub<P extends Protoframe>
    * @param timeout How long to wait for a response from the target before
    *  retrying. By default the timeout is 500ms (thus waiting 25 seconds total)
    */
-  public static async connect<P extends Protoframe>(
-    pubsub: ProtoframePubsub<P>,
-    retries = 50,
-    timeout = 500,
-  ): Promise<ProtoframePubsub<P>> {
-    for (let i = 0; i <= retries; i++) {
-      try {
-        await pubsub.ping({ timeout });
-        return pubsub;
-      } catch (_) {
-        continue;
-      }
-    }
-    throw new Error(
-      `Could not connect on protocol ${pubsub.protocol.type} after ${
-        retries * timeout
-      }ms`,
-    );
-  }
 
   /**
    * We are a "parent" page that is embedding an iframe, and we wish to connect
    * to that iframe for communication.
    *
    * @param protocol The protocol this connector will communicate with
-   * @param ws The target Websocket we are connecting to
+   * @param webSocket The target Websocket we are connecting to
    */
-  public static parent<P extends Protoframe>(
-    protocol: ProtoframeDescriptor<P>,
-    ws: WebSocket,
-  ): ProtoframePubsub<P> {
-    return new ProtoframePubsub(protocol, ws);
-  }
 
   /**
    * We are an "iframe" page that will be embedded, and we wish to connect to a
