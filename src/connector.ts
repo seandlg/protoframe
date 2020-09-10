@@ -101,7 +101,9 @@ function isPayloadResponseOfType<
   }
 }
 
-function destroyAll(listeners: [Window, (ev: MessageEvent) => void][]): void {
+function destroyAll(
+  listeners: [WebSocket, (ev: MessageEvent) => void][],
+): void {
   listeners.forEach(([w, l]) => w.removeEventListener('message', l));
   listeners.length = 0;
 }
@@ -110,16 +112,20 @@ function awaitResponse<
   P extends Protoframe,
   T extends ProtoframeMessageType<P>,
   R extends ProtoframeMessageResponse<P, T>
->(thisWindow: Window, protocol: ProtoframeDescriptor<P>, type: T): Promise<R> {
+>(
+  webSocket: WebSocket,
+  protocol: ProtoframeDescriptor<P>,
+  type: T,
+): Promise<R> {
   return new Promise((accept) => {
     const handle: (ev: MessageEvent) => void = (ev) => {
       const payload = ev.data;
       if (isPayloadResponseOfType(protocol, type, payload)) {
-        thisWindow.removeEventListener('message', handle);
+        webSocket.removeEventListener('message', handle);
         accept(payload.response);
       }
     };
-    thisWindow.addEventListener('message', handle);
+    webSocket.addEventListener('message', handle);
   });
 }
 
@@ -128,19 +134,19 @@ function handleTell0<
   T extends ProtoframeMessageType<P>,
   _R extends ProtoframeMessageResponse<P, T> & undefined
 >(
-  thisWindow: Window,
+  webSocket: WebSocket,
   protocol: ProtoframeDescriptor<P>,
   type: T,
   handler: (body: ProtoframeMessageBody<P, T>) => void,
-): [Window, (ev: MessageEvent) => void] {
+): [WebSocket, (ev: MessageEvent) => void] {
   const listener = (ev: MessageEvent): void => {
     const payload = ev.data;
     if (isPayloadBodyOfType(protocol, 'tell', type, payload)) {
       handler(payload.body);
     }
   };
-  thisWindow.addEventListener('message', listener);
-  return [thisWindow, listener];
+  webSocket.addEventListener('message', listener);
+  return [webSocket, listener];
 }
 
 function handleAsk0<
@@ -148,25 +154,22 @@ function handleAsk0<
   T extends ProtoframeMessageType<P>,
   R extends ProtoframeMessageResponse<P, T> & {}
 >(
-  thisWindow: Window,
-  targetWindow: Window,
+  webSocket: WebSocket,
   protocol: ProtoframeDescriptor<P>,
   type: T,
-  targetOrigin: string,
   handler: (body: ProtoframeMessageBody<P, T>) => Promise<R>,
-): [Window, (ev: MessageEvent) => void] {
+): [WebSocket, (ev: MessageEvent) => void] {
   const listener = async (ev: MessageEvent): Promise<void> => {
     const payload = ev.data;
     if (isPayloadBodyOfType(protocol, 'ask', type, payload)) {
       const response = await handler(payload.body);
-      targetWindow.postMessage(
-        mkPayloadResponse(protocol, type, response),
-        targetOrigin,
+      webSocket.send(
+        JSON.stringify(mkPayloadResponse(protocol, type, response)),
       );
     }
   };
-  thisWindow.addEventListener('message', listener);
-  return [thisWindow, listener];
+  webSocket.addEventListener('message', listener);
+  return [webSocket, listener];
 }
 
 function tell0<
@@ -174,15 +177,13 @@ function tell0<
   T extends ProtoframeMessageType<P>,
   _R extends ProtoframeMessageResponse<P, T> & undefined
 >(
-  targetWindow: Window,
+  webSocket: WebSocket,
   protocol: ProtoframeDescriptor<P>,
   type: T,
   body: ProtoframeMessageBody<P, T>,
-  targetOrigin: string,
 ): _R {
-  return targetWindow.postMessage(
-    mkPayloadBody(protocol, 'tell', type, body),
-    targetOrigin,
+  return webSocket.send(
+    JSON.stringify(mkPayloadBody(protocol, 'tell', type, body)),
   ) as _R;
 }
 
@@ -192,12 +193,10 @@ async function ask0<
   B extends ProtoframeMessageBody<P, T>,
   R extends ProtoframeMessageResponse<P, T> & {}
 >(
-  thisWindow: Window,
-  targetWindow: Window,
+  webSocket: WebSocket,
   protocol: ProtoframeDescriptor<P>,
   type: T,
   body: B,
-  targetOrigin: string,
   timeout: number,
 ): Promise<R> {
   const run = new Promise<R>(async (accept, reject) => {
@@ -205,14 +204,11 @@ async function ask0<
       () => reject(new Error(`Failed to get response within ${timeout}ms`)),
       timeout,
     );
-    const response = await awaitResponse(thisWindow, protocol, type);
+    const response = await awaitResponse(webSocket, protocol, type);
     clearTimeout(timeoutHandler);
     accept(response);
   });
-  targetWindow.postMessage(
-    mkPayloadBody(protocol, 'ask', type, body),
-    targetOrigin,
-  );
+  webSocket.send(JSON.stringify(mkPayloadBody(protocol, 'ask', type, body)));
   return run;
 }
 
@@ -302,17 +298,19 @@ export class ProtoframeSubscriber<P extends Protoframe>
   implements AbstractProtoframeSubscriber<P> {
   constructor(
     private readonly protocol: ProtoframeDescriptor<P>,
-    private readonly thisWindow: Window = window,
+    private readonly webSocket: WebSocket = new WebSocket(
+      'https://staging.jelly-party.com',
+    ),
   ) {}
 
-  private listeners: [Window, (ev: MessageEvent) => void][] = [];
+  private listeners: [WebSocket, (ev: MessageEvent) => void][] = [];
 
   public handleTell<
     T extends ProtoframeMessageType<P>,
     _R extends ProtoframeMessageResponse<P, T> & undefined
   >(type: T, handler: (body: ProtoframeMessageBody<P, T>) => void): void {
     this.listeners.push(
-      handleTell0(this.thisWindow, this.protocol, type, handler),
+      handleTell0(this.webSocket, this.protocol, type, handler),
     );
   }
 
@@ -328,52 +326,26 @@ export class ProtoframePublisher<P extends Protoframe>
    * to that iframe in order to publish messages.
    *
    * @param protocol The protocol this connector will communicate with
-   * @param iframe The target iframe HTML element we are connecting to
-   * @param targetOrigin The target scheme and host we expect the receiver to be
    */
   public static parent<P extends Protoframe>(
     protocol: ProtoframeDescriptor<P>,
-    iframe: HTMLIFrameElement,
-    targetOrigin?: string,
+    ws: WebSocket,
   ): ProtoframePublisher<P> {
-    const targetWindow = iframe.contentWindow;
-    if (hasValue(targetWindow)) {
-      return new ProtoframePublisher(protocol, targetWindow, targetOrigin);
-    } else {
-      throw new Error('iframe.contentWindow was null');
-    }
+    return new ProtoframePublisher(protocol, ws);
   }
 
-  /**
-   * We are an "iframe" page that will be embedded, and we wish to connect to a
-   * parent page in order to publish messages.
-   *
-   * @param protocol The protocol this connector will communicate with
-   * @param targetOrigin The target scheme and host we expect the receiver to be
-   * @param targetWindow The window of the parent frame. This should normally be
-   *  the `window.parent`
-   */
-  public static iframe<P extends Protoframe>(
-    protocol: ProtoframeDescriptor<P>,
-    targetOrigin?: string,
-    targetWindow: Window = window.parent,
-  ): ProtoframePublisher<P> {
-    return new ProtoframePublisher(protocol, targetWindow, targetOrigin);
-  }
-
-  private listeners: [Window, (ev: MessageEvent) => void][] = [];
+  private listeners: [WebSocket, (ev: MessageEvent) => void][] = [];
 
   constructor(
     private readonly protocol: ProtoframeDescriptor<P>,
-    private readonly targetWindow: Window,
-    private readonly targetOrigin: string = '*',
+    private readonly webSocket: WebSocket,
   ) {}
 
   tell<T extends ProtoframeMessageType<P>, _R extends undefined>(
     type: T,
     body: P[T]['body'],
   ): void {
-    tell0(this.targetWindow, this.protocol, type, body, this.targetOrigin);
+    tell0(this.webSocket, this.protocol, type, body);
   }
 
   destroy(): void {
@@ -419,28 +391,13 @@ export class ProtoframePubsub<P extends Protoframe>
    * to that iframe for communication.
    *
    * @param protocol The protocol this connector will communicate with
-   * @param iframe The target iframe HTML element we are connecting to
-   * @param targetOrigin The target scheme and host we expect the receiver to be
-   * @param thisWindow The parent window (our window). This should normally be
-   *  the current `window`
+   * @param ws The target Websocket we are connecting to
    */
   public static parent<P extends Protoframe>(
     protocol: ProtoframeDescriptor<P>,
-    iframe: HTMLIFrameElement,
-    targetOrigin = '*',
-    thisWindow: Window = window,
+    ws: WebSocket,
   ): ProtoframePubsub<P> {
-    const targetWindow = iframe.contentWindow;
-    if (hasValue(targetWindow)) {
-      return new ProtoframePubsub(
-        protocol,
-        targetWindow,
-        thisWindow,
-        targetOrigin,
-      );
-    } else {
-      throw new Error('iframe.contentWindow was null');
-    }
+    return new ProtoframePubsub(protocol, ws);
   }
 
   /**
@@ -448,70 +405,42 @@ export class ProtoframePubsub<P extends Protoframe>
    * parent page for communication.
    *
    * @param protocol The protocol this connector will communicate with
-   * @param targetOrigin The target scheme and host we expect the receiver to be
-   * @param thisWindow The window of the current iframe. This should normally be
-   *  the current `window`
-   * @param targetWindow The window of the parent frame. This should normally be
-   *  the `window.parent`
+   * @param webSocket The target Websocket
    */
-  public static iframe<P extends Protoframe>(
+  public static webSocket<P extends Protoframe>(
     protocol: ProtoframeDescriptor<P>,
-    targetOrigin = '*',
-    {
-      thisWindow = window,
-      targetWindow = window.parent,
-    }: { thisWindow?: Window; targetWindow?: Window } = {},
+    webSocket: WebSocket,
   ): ProtoframePubsub<P> {
-    return new ProtoframePubsub(
-      protocol,
-      targetWindow,
-      thisWindow,
-      targetOrigin,
-    );
+    return new ProtoframePubsub(protocol, webSocket);
   }
 
   private systemProtocol: ProtoframeDescriptor<SystemProtocol> = {
     type: `system|${this.protocol.type}`,
   };
-  private listeners: [Window, (ev: MessageEvent) => void][] = [];
+  private listeners: [WebSocket, (ev: MessageEvent) => void][] = [];
 
   constructor(
     private readonly protocol: ProtoframeDescriptor<P>,
-    private readonly targetWindow: Window,
-    private readonly thisWindow: Window = window,
-    private readonly targetOrigin: string = '*',
+    private readonly webSocket: WebSocket,
   ) {
     // Answer internally to ping requests
-    handleAsk0(
-      thisWindow,
-      targetWindow,
-      this.systemProtocol,
-      'ping',
-      targetOrigin,
-      () => Promise.resolve({}),
+    handleAsk0(webSocket, this.systemProtocol, 'ping', () =>
+      Promise.resolve({}),
     );
   }
 
   /**
    * Send a 'ping' request to check if there is a listener open at the target
-   * window. If this times out, then it means no listener was available *at the
+   * websocket. If this times out, then it means no listener was available *at the
    * time the ping request was sent*. Since requests are not buffered, then this
-   * should be retried if we're waiting for some target iframe to start up and
+   * should be retried if we're waiting for some target websocket to start up and
    * load its assets. See `ProtoframePubsub.connect` as an implementation of
    * this functionality.
    *
    * @param timeout How long to wait for the reply before resulting in an error
    */
   public async ping({ timeout = 10000 }: { timeout?: number }): Promise<void> {
-    await ask0(
-      this.thisWindow,
-      this.targetWindow,
-      this.systemProtocol,
-      'ping',
-      {},
-      this.targetOrigin,
-      timeout,
-    );
+    await ask0(this.webSocket, this.systemProtocol, 'ping', {}, timeout);
   }
 
   public handleTell<
@@ -519,7 +448,7 @@ export class ProtoframePubsub<P extends Protoframe>
     _R extends ProtoframeMessageResponse<P, T> & undefined
   >(type: T, handler: (body: ProtoframeMessageBody<P, T>) => void): void {
     this.listeners.push(
-      handleTell0(this.thisWindow, this.protocol, type, handler),
+      handleTell0(this.webSocket, this.protocol, type, handler),
     );
   }
 
@@ -527,7 +456,7 @@ export class ProtoframePubsub<P extends Protoframe>
     type: T,
     body: P[T]['body'],
   ): void {
-    tell0(this.targetWindow, this.protocol, type, body, this.targetOrigin);
+    tell0(this.webSocket, this.protocol, type, body);
   }
 
   public handleAsk<
@@ -535,14 +464,7 @@ export class ProtoframePubsub<P extends Protoframe>
     R extends P[T]['response'] & {}
   >(type: T, handler: (body: P[T]['body']) => Promise<R>): void {
     this.listeners.push(
-      handleAsk0(
-        this.thisWindow,
-        this.targetWindow,
-        this.protocol,
-        type,
-        this.targetOrigin,
-        handler,
-      ),
+      handleAsk0(this.webSocket, this.protocol, type, handler),
     );
   }
 
@@ -551,15 +473,7 @@ export class ProtoframePubsub<P extends Protoframe>
     B extends P[T]['body'],
     R extends P[T]['response'] & {}
   >(type: T, body: B, timeout = 10000): Promise<R> {
-    return ask0(
-      this.thisWindow,
-      this.targetWindow,
-      this.protocol,
-      type,
-      body,
-      this.targetOrigin,
-      timeout,
-    );
+    return ask0(this.webSocket, this.protocol, type, body, timeout);
   }
 
   destroy(): void {
