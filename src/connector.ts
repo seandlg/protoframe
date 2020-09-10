@@ -1,3 +1,5 @@
+import WebSocket from 'ws';
+
 import {
   Protoframe,
   ProtoframeMessageType,
@@ -101,9 +103,7 @@ function isPayloadResponseOfType<
   }
 }
 
-function destroyAll(
-  listeners: [WebSocket, (ev: MessageEvent) => void][],
-): void {
+function destroyAll(listeners: [WebSocket, (ev: any) => void][]): void {
   listeners.forEach(([w, l]) => w.removeEventListener('message', l));
   listeners.length = 0;
 }
@@ -118,7 +118,7 @@ function awaitResponse<
   type: T,
 ): Promise<R> {
   return new Promise((accept) => {
-    const handle: (ev: MessageEvent) => void = (ev) => {
+    const handle: (ev: any) => void = (ev) => {
       const payload = ev.data;
       if (isPayloadResponseOfType(protocol, type, payload)) {
         webSocket.removeEventListener('message', handle);
@@ -139,7 +139,7 @@ function handleTell0<
   type: T,
   handler: (body: ProtoframeMessageBody<P, T>) => void,
 ): [WebSocket, (ev: MessageEvent) => void] {
-  const listener = (ev: MessageEvent): void => {
+  const listener = (ev: any): void => {
     const payload = ev.data;
     if (isPayloadBodyOfType(protocol, 'tell', type, payload)) {
       handler(payload.body);
@@ -159,7 +159,7 @@ function handleAsk0<
   type: T,
   handler: (body: ProtoframeMessageBody<P, T>) => Promise<R>,
 ): [WebSocket, (ev: MessageEvent) => void] {
-  const listener = async (ev: MessageEvent): Promise<void> => {
+  const listener = async (ev: any): Promise<void> => {
     const payload = ev.data;
     if (isPayloadBodyOfType(protocol, 'ask', type, payload)) {
       const response = await handler(payload.body);
