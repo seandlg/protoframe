@@ -16,6 +16,17 @@ async function createCacheWithClient(): Promise<
     { [key: string]: string },
   ]
 > {
+  [
+    { name: 'server', obj: wss },
+    { name: 'clientWebsocket', obj: clientWebsocket },
+    { name: 'serverWebsocket', obj: serverWebsocket },
+  ].forEach(({ name, obj }) => {
+    try {
+      obj.close();
+    } catch {
+      console.log(`Cannot close ${name}. ${name} not running.`);
+    }
+  });
   console.log('Starting server');
   wss = new WebSocket.Server({ port: 8080 });
   const promisifiedServerSocket = new Promise<WebSocket>((resolve) => {
